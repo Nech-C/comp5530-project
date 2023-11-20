@@ -123,7 +123,6 @@ def cumulative_similarity_penalty(pretrained_model, state_trajectory, action_tra
             cum_penalty *= penalty  # Accumulate penalty
     return cum_penalty
 
-
 def update_params(reference_models, model):
     pass
 
@@ -211,6 +210,7 @@ def train_model_with_custom_algo():
         optimizer.step()
 
         print(f"Episode {episode}, Total Reward: {sum(rewards)}, lambda_penalty: {lambda_penalty}")
+
 
 if __name__ == "__main__":
     # Uncomment to train the initial model

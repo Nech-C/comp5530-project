@@ -45,3 +45,29 @@ class SimpleGridEnv(gym.Env):
         left = self.current_position - 1
         right = self.current_position + 1
         return self.grid[left:right+1]
+    
+def run():
+    env = SimpleGridEnv()
+    obs = env.reset()
+
+    while True:
+        print("Observation:", obs)
+        action_input = input("Enter 'l' to move left or 'r' to move right: ")
+        
+        if action_input == 'l':
+            action = 0
+        elif action_input == 'r':
+            action = 1
+        else:
+            print("Invalid input. Try again.")
+            continue
+        
+        obs, reward, done, _ = env.step(action)
+        
+        if done:
+            print("Game Over! Final Reward:", reward)
+            break
+        
+        
+if __name__ == "__main__":
+    run()
