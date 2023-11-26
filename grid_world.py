@@ -47,6 +47,9 @@ class SimpleGridEnv(gym.Env):
         right = self.current_position + 1
         return self.grid[left:right+1]
     
+    def all_states(self):
+        return [self.grid[i-1:i+2] for i in range(1, len(self.grid) - 1)]
+    
 def run():
     env = SimpleGridEnv()
     obs = env.reset()
