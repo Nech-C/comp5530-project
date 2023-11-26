@@ -14,7 +14,7 @@ pretrained_model_list = ["./trained_models/a2c_model1.pth"]
 learning_rate = 0.002
 gamma = 0.99
 epoch = 1000
-n_step = 2
+n_step = 4
 epsilon = 0.2  # Clipping parameter for PPO
 
 # Initialize environment and models
@@ -34,7 +34,6 @@ log_file = setup_logging()
 
 def log(message, file_object=None):
     """Utility function to log a message to a file and stdout."""
-    print(message)
     if file_object:
         print(message, file=file_object)
         file_object.flush()
@@ -113,10 +112,12 @@ def should_update(log_cp_new, log_cp_old, epsilon):
     return ratio < (1 - epsilon) or ratio > (1 + epsilon)
 
 def train():
-    """Train the model using n-step counterfactual PPO."""
+    log_file = setup_logging()
+
     try:
+        # Report action probability distribution of the old model at the start
         report_old_model_distribution(reference_model, env, log_file)
-        log("-" * 60, log_file)
+        log("-" * 60, log_file)  # Visual separator for the beginning of training
 
         for episode in range(epoch):
             state = env.reset()
@@ -141,10 +142,20 @@ def train():
 
                 state = next_state
 
-            # Compute returns and counterfactual probabilities
             returns = get_discounted_rewards(model.rewards)
             log_nstep_cp_new = get_nstep_cp(model, n_step, model.state_trajectory, model.action_trajectory)
             log_nstep_cp_old = get_nstep_cp(reference_model, n_step, model.state_trajectory, model.action_trajectory)
+
+            # Log before update
+            log(f"\nEpisode {episode} - Before Update:", log_file)
+            log(f"{'State':>30} | {'Action':>6} | {'New CP':>10} | {'Old CP':>10} | {'Update':>6}", log_file)
+            log("-" * 70, log_file)
+            for state_tensor, action, log_cp_new, log_cp_old in zip(model.state_trajectory, model.action_trajectory, log_nstep_cp_new, log_nstep_cp_old):
+                state_repr = ' '.join(f"{x:.2f}" for x in state_tensor.detach().numpy().flatten())
+                cp_new = torch.exp(log_cp_new).item()
+                cp_old = torch.exp(log_cp_old).item()
+                update_decision = "Yes" if should_update(log_cp_new, log_cp_old, epsilon) else "No"
+                log(f"{state_repr:>30} | {action.item():>6} | {cp_new:>10.4f} | {cp_old:>10.4f} | {update_decision:>6}", log_file)
 
             # Perform model update
             actor_loss, critic_loss = update_model(
@@ -157,29 +168,25 @@ def train():
                 optimizer
             )
 
-            # Log training information
-            log_training_info(episode, env, model, returns, actor_loss, critic_loss, log_file)
+            # Log after update
+            log(f"Episode {episode} - After Update:", log_file)
+            log(f"{'State':>30} | {'Action Probs':>20}", log_file)
+            log("-" * 70, log_file)
+            for state in env.all_states():
+                state_tensor = torch.FloatTensor(state).reshape(1, 3).float()
+                action_prob, _ = model(state_tensor)
+                action_prob = action_prob.detach().numpy().squeeze()
+                state_repr = ' '.join(f"{x:.2f}" for x in state)
+                log(f"{state_repr:>30} | [{action_prob[0]:.4f}, {action_prob[1]:.4f}]", log_file)
+
+            last_reward = model.rewards[-1].item()
+            log(f"Reward: {last_reward}, Actor Loss: {actor_loss}, Critic Loss: {critic_loss}", log_file)
+            log("-" * 70, log_file)
 
         save_model(model, log_file)
 
     finally:
         log_file.close()
-
-def log_training_info(episode, env, model, returns, actor_loss, critic_loss, log_file):
-    """Helper function to log training information for each episode."""
-    log(f"\nEpisode {episode} - After Update:", log_file)
-    log(f"{'State':>30} | {'Action Probs':>20}", log_file)
-    log("-" * 70, log_file)
-    for state in env.all_states():
-        state_tensor = torch.FloatTensor(state).reshape(1, 3).float()
-        action_prob, _ = model(state_tensor)
-        action_prob = action_prob.detach().numpy().squeeze()
-        state_repr = ' '.join(f"{x:.2f}" for x in state)
-        log(f"{state_repr:>30} | [{action_prob[0]:.4f}, {action_prob[1]:.4f}]", log_file)
-
-    last_reward = returns[-1].item()
-    log(f"Reward: {last_reward}, Actor Loss: {actor_loss}, Critic Loss: {critic_loss}", log_file)
-    log("-" * 70, log_file)
 
 if __name__ == "__main__":
     train()
