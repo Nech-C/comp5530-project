@@ -36,7 +36,7 @@ class SimpleGridEnv(gym.Env):
         reward = 0
         done = False
         
-        if self.move_count >= 5:
+        if self.move_count >= 4:
             reward = self.grid[self.current_position]
             done = True
 
