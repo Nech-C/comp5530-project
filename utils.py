@@ -1,13 +1,9 @@
-# utils.py: 
-import gym
+# utils.py:
 import torch
-import random
-import numpy as np
 import torch.nn as nn
-import torch.optim as optim
-
+import numpy as np
+import random
 from gym import spaces
-
 
 class ActorCritic(nn.Module):
     def __init__(self):
@@ -16,38 +12,122 @@ class ActorCritic(nn.Module):
         self.actor = nn.Linear(16, 2)
         self.critic = nn.Linear(16, 1)
         self.reset_trajectory()
-        
+
     def forward(self, x):
         x = torch.relu(self.fc(x))
         action_prob = torch.softmax(self.actor(x), dim=-1)
         value = self.critic(x)
         return action_prob, value
-    
+
     def reset_trajectory(self):
         self.state_trajectory = []  # To store states
         self.action_trajectory = []  # To store actions
-        self.penalties = []
-        self.log_probs = []
-        self.values = []
-        self.rewards = []
+        self.log_probs = []  # Log probabilities
+        self.values = []  # Value estimates
+        self.rewards = []  # Observed rewards
+
+def log(message, file_object=None):
+    """Utility function to log a message to a file and stdout."""
+    if file_object:
+        print(message, file=file_object)
+        file_object.flush()
+
+def get_discounted_rewards(rewards, gamma):
+    """Calculate the discounted rewards with normalization."""
+    returns = []
+    R = 0
+    for r in rewards[::-1]:
+        R = r + gamma * R
+        returns.insert(0, R)
+    returns = torch.tensor(returns, dtype=torch.float)
+    returns = (returns - returns.mean()) / (returns.std() + 1e-5)
+    return returns
+
+def report_old_model_distribution(model, env, file_object):
+    """Report action probability distribution of the old model."""
+    log("Old Model Action Probability Distribution:", file_object)
+    for state in env.all_states():
+        state_tensor = torch.FloatTensor(state).reshape(1, 3).float()
+        action_prob, _ = model(state_tensor)
+        log(f"State: {state} - Action Probabilities: {action_prob.detach().numpy()}", file_object)
+
+def save_model(model, model_dir, filename):
+    """Save the current model state."""
+    model_path = f"{model_dir}/{filename}"
+    torch.save(model.state_dict(), model_path)
+
+def nstep_cumulative_prob_from_logs(n_step, log_probs):
+    """
+    Calculate n-step cumulative probabilities using log probabilities from trajectory.
+    Args:
+        n_step (int): Number of steps to consider for n-step cumulative probability.
+        log_probs (Tensor): Tensor of log probabilities for each step.
+    Returns:
+        Tensor of n-step cumulative probabilities.
+    """
+    nstep_cumulative_probs = []
+    for i in range(len(log_probs)):
+        cumulative_log_prob = sum(log_probs[max(0, i - n_step + 1):i + 1])
+        cumulative_prob = torch.exp(cumulative_log_prob)
+        nstep_cumulative_probs.append(cumulative_prob)
+    return torch.stack(nstep_cumulative_probs)
+
+def nstep_cumulative_prob_from_states(model, n_step, states, actions):
+    """
+    Calculate n-step cumulative probabilities based on a model, states, and actions.
+    Args:
+        model (nn.Module): The model to use for probability calculation.
+        n_step (int): Number of steps to consider for n-step cumulative probability.
+        states (Tensor): Tensor of states.
+        actions (Tensor): Tensor of actions.
+    Returns:
+        Tensor of n-step cumulative probabilities.
+    """
+    log_probs = []
+    for state, action in zip(states, actions):
+        action_prob, _ = model(state.unsqueeze(0))
+        action_dist = torch.distributions.Categorical(action_prob)
+        log_prob = action_dist.log_prob(action)
+        log_probs.append(log_prob)
     
-def update_tensorboard(writer, episode: int, loss: float, reward: any):
-        """ the method updates the tensorboard
+    return nstep_cumulative_prob_from_logs(n_step, torch.stack(log_probs))
 
-        Args:
-            episode (int): the eposode number
-            loss (float): policy update loss 
-        """
-        
-        if loss is not None:
-            writer.add_scalar('Loss/train', loss, episode)
-        if reward is not None:
-            writer.add_scalar('Reward/train', reward, episode)
+def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old, epsilon, optimizer):
+    """Update the model using the PPO algorithm with clipping."""
+    actor_loss = []
+    critic_loss = []
 
-def load_reference_models(model_list):
+    for log_prob, value, R, log_cp, log_cp_old in zip(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old):
+        advantage = R - value.item()
+        ratio = torch.exp(log_cp - log_cp_old)  # PPO's probability ratio
+        surr1 = ratio * advantage
+        surr2 = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantage
+        actor_loss.append(-torch.min(surr1, surr2))
+        critic_loss.append(nn.functional.mse_loss(value.flatten(), torch.tensor([R], dtype=torch.float)))
+
+    actor_loss = torch.stack(actor_loss).sum() if actor_loss else torch.tensor(0.0)
+    critic_loss = torch.stack(critic_loss).sum() if critic_loss else torch.tensor(0.0)
+    total_loss = actor_loss + critic_loss
+
+    optimizer.zero_grad()
+    total_loss.backward()
+    optimizer.step()
+
+    return actor_loss.item(), critic_loss.item()
+
+def bprop_with_log_prob():
+    ...
+
+def should_update(log_cp_new, log_cp_old, epsilon):
+    """Check if model's counterfactual probabilities suggest an update."""
+    ratio = torch.exp(log_cp_new - log_cp_old)
+    return ratio < (1 - epsilon) or ratio > (1 + epsilon)
+
+def load_reference_models(model_list, n):
+    """Load reference models for comparative analysis."""
     reference_models = []
     random.shuffle(model_list)
-    for i in min(len(model_list), 5):
+    for i in range(min(len(model_list), n)):
         model = ActorCritic()
         model.load_state_dict(torch.load(model_list[i]))
         model.eval()
