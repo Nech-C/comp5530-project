@@ -3,11 +3,20 @@ import torch
 import torch.nn as nn
 import numpy as np
 import random
+from scipy.stats import entropy
 from gym import spaces
+from sklearn.metrics.pairwise import cosine_similarity
+from scipy.spatial.distance import jensenshannon
+
 
 class ActorCritic(nn.Module):
     def __init__(self):
         super(ActorCritic, self).__init__()
+        self.rewards = None
+        self.values = None
+        self.log_probs = None
+        self.action_trajectory = None
+        self.state_trajectory = None
         self.fc = nn.Linear(3, 16)
         self.actor = nn.Linear(16, 2)
         self.critic = nn.Linear(16, 1)
@@ -26,11 +35,13 @@ class ActorCritic(nn.Module):
         self.values = []  # Value estimates
         self.rewards = []  # Observed rewards
 
+
 def log(message, file_object=None):
     """Utility function to log a message to a file and stdout."""
     if file_object:
         print(message, file=file_object)
         file_object.flush()
+
 
 def get_discounted_rewards(rewards, gamma):
     """Calculate the discounted rewards with normalization."""
@@ -43,6 +54,7 @@ def get_discounted_rewards(rewards, gamma):
     returns = (returns - returns.mean()) / (returns.std() + 1e-5)
     return returns
 
+
 def report_old_model_distribution(model, env, file_object):
     """Report action probability distribution of the old model."""
     log("Old Model Action Probability Distribution:", file_object)
@@ -51,10 +63,12 @@ def report_old_model_distribution(model, env, file_object):
         action_prob, _ = model(state_tensor)
         log(f"State: {state} - Action Probabilities: {action_prob.detach().numpy()}", file_object)
 
+
 def save_model(model, model_dir, filename):
     """Save the current model state."""
     model_path = f"{model_dir}/{filename}"
     torch.save(model.state_dict(), model_path)
+
 
 def nstep_cumulative_prob_from_logs(n_step, log_probs):
     """
@@ -71,6 +85,7 @@ def nstep_cumulative_prob_from_logs(n_step, log_probs):
         cumulative_prob = torch.exp(cumulative_log_prob)
         nstep_cumulative_probs.append(cumulative_prob)
     return torch.stack(nstep_cumulative_probs)
+
 
 def nstep_cumulative_prob_from_states(model, n_step, states, actions):
     """
@@ -89,8 +104,9 @@ def nstep_cumulative_prob_from_states(model, n_step, states, actions):
         action_dist = torch.distributions.Categorical(action_prob)
         log_prob = action_dist.log_prob(action)
         log_probs.append(log_prob)
-    
+
     return nstep_cumulative_prob_from_logs(n_step, torch.stack(log_probs))
+
 
 def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old, epsilon, optimizer):
     """Update the model using the PPO algorithm with clipping."""
@@ -115,13 +131,16 @@ def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nst
 
     return actor_loss.item(), critic_loss.item()
 
+
 def bprop_with_log_prob():
     ...
+
 
 def should_update(log_cp_new, log_cp_old, epsilon):
     """Check if model's counterfactual probabilities suggest an update."""
     ratio = torch.exp(log_cp_new - log_cp_old)
     return ratio < (1 - epsilon) or ratio > (1 + epsilon)
+
 
 def load_reference_models(model_list, n):
     """Load reference models for comparative analysis."""
@@ -180,6 +199,7 @@ def train_a2c(env, num_episodes, learning_rate, gamma, save_path=None):
 
     return model
 
+
 def train_ppo(env, num_episodes, learning_rate, gamma, epsilon, beta, save_path=None):
     """
     Train a PPO model.
@@ -229,6 +249,7 @@ def train_ppo(env, num_episodes, learning_rate, gamma, epsilon, beta, save_path=
 
     return model
 
+
 def bprop_with_ppo(log_probs, values, entropies, returns, epsilon, beta, optimizer):
     """
     Perform backpropagation using the PPO loss function.
@@ -260,6 +281,7 @@ def bprop_with_ppo(log_probs, values, entropies, returns, epsilon, beta, optimiz
     optimizer.zero_grad()
     total_loss.backward()
     optimizer.step()
+
 
 def evaluate_model(model, env, num_runs):
     """
@@ -294,3 +316,160 @@ def evaluate_model(model, env, num_runs):
     average_reward = total_reward / num_runs
     return average_reward
 
+
+def grid_state_visitation_eval(policy, env, num_runs):
+    """
+    Evaluate state visitation frequency of a policy in a gridworld environment.
+
+    Args:
+        policy (callable): A function that takes a state and returns an action.
+        env: The gridworld environment.
+        num_runs (int): Number of trajectories to generate.
+
+    Returns:
+        numpy.ndarray: A matrix representing the visitation frequency of each grid cell.
+    """
+    # Determine the dimensionality of the grid
+    grid_size = env.get_grid_size()
+    if isinstance(grid_size, int):  # 1D grid
+        visitation_matrix = np.zeros(grid_size)
+    elif isinstance(grid_size, tuple) and len(grid_size) == 2:  # 2D grid
+        visitation_matrix = np.zeros(grid_size)
+    else:
+        raise ValueError("Unsupported grid size")
+
+    for _ in range(num_runs):
+        state = env.reset()
+        position = env.get_current_position()  # You might need to implement this method in env
+        update_visitation_matrix(visitation_matrix, position)
+
+        done = False
+        while not done:
+            action = policy(state)
+            state, _, done, info = env.step(action)
+            update_visitation_matrix(visitation_matrix, info['position'])
+
+    return visitation_matrix
+
+
+def update_visitation_matrix(matrix, position):
+    """
+    Update the visitation matrix based on the agent's position.
+
+    Args:
+        matrix (numpy.ndarray): The visitation matrix.
+        position (int or tuple): The agent's position.
+    """
+    if isinstance(position, int):  # 1D position
+        matrix[position] += 1
+    elif isinstance(position, tuple) and len(position) == 2:  # 2D position
+        matrix[position[0], position[1]] += 1
+    else:
+        raise ValueError("Unsupported position format")
+
+
+def all_action_prob_dists(states, model):
+    """
+    Generate action probability distributions for a list of states using a model.
+
+    Args:
+        states (list): List of states.
+        model (nn.Module): The neural network model.
+
+    Returns:
+        numpy.ndarray: Array of action probability distributions for each state.
+    """
+    prob_dists = []
+    for state in states:
+        state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        with torch.no_grad():
+            action_probs, _ = model(state_tensor)
+            prob_dists.append(action_probs.numpy())
+    return np.array(prob_dists)
+
+
+def kl_divergence(dists):
+    """
+    Calculate average Kullback-Leibler divergence between pairs of probability distributions.
+
+    Args:
+        dists (numpy.ndarray): Array of probability distributions.
+
+    Returns:
+        float: Average KL divergence.
+    """
+    num_dists = dists.shape[0]
+    total_kl_div = 0
+    count = 0
+    for i in range(num_dists):
+        for j in range(i + 1, num_dists):
+            kl_div_ij = entropy(dists[i], dists[j])
+            total_kl_div += kl_div_ij
+            count += 1
+    return total_kl_div / count if count > 0 else 0
+
+
+def mean_variance(dists):
+    """
+    Calculate mean and variance of probability distributions.
+
+    Args:
+        dists (numpy.ndarray): Array of probability distributions.
+
+    Returns:
+        Tuple(numpy.ndarray, numpy.ndarray): Mean and variance of distributions.
+    """
+    mean = np.mean(dists, axis=0)
+    variance = np.var(dists, axis=0)
+    return mean, variance
+
+
+def mean_variance(dists):
+    """
+    Calculate mean and variance of probability distributions.
+
+    Args:
+        dists (numpy.ndarray): Array of probability distributions.
+
+    Returns:
+        Tuple(numpy.ndarray, numpy.ndarray): Mean and variance of distributions.
+    """
+    mean = np.mean(dists, axis=0)
+    variance = np.var(dists, axis=0)
+    return mean, variance
+
+
+def average_cosine_similarity(dists):
+    """
+    Calculate average cosine similarity between pairs of probability distributions.
+
+    Args:
+        dists (numpy.ndarray): Array of probability distributions.
+
+    Returns:
+        float: Average cosine similarity.
+    """
+    sim_matrix = cosine_similarity(dists)
+    upper_triangle = sim_matrix[np.triu_indices_from(sim_matrix, k=1)]
+    return np.mean(upper_triangle)
+
+
+def jensen_shannon_divergence(dists):
+    """
+    Calculate average Jensen-Shannon divergence between pairs of probability distributions.
+
+    Args:
+        dists (numpy.ndarray): Array of probability distributions.
+
+    Returns:
+        float: Average Jensen-Shannon divergence.
+    """
+    num_dists = dists.shape[0]
+    total_js_div = 0
+    count = 0
+    for i in range(num_dists):
+        for j in range(i + 1, num_dists):
+            js_div_ij = jensenshannon(dists[i], dists[j])
+            total_js_div += js_div_ij
+            count += 1
+    return total_js_div / count if count > 0 else 0
