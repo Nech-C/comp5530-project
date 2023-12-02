@@ -3,15 +3,14 @@ import torch
 import torch.optim as optim
 import os
 import time
-from utils import ActorCritic, log, get_discounted_rewards, report_old_model_distribution, save_model, bprop_with_cumulative_prob, should_update, load_reference_models, nstep_cumulative_prob_from_logs, nstep_cumulative_prob_from_states
+from utils import ActorCritic, log, get_discounted_rewards, report_old_model_distribution, save_model, \
+    bprop_with_cumulative_prob, should_update, load_reference_models, nstep_cumulative_prob_from_logs, \
+    nstep_cumulative_prob_from_states
 from grid_world import SimpleGridEnv
 
 # Hyperparameters (use default values as per your previous setup)
 learning_rate = 0.002
-gamma = 0.99
-epoch = 1000
-n_step = 4
-epsilon = 0.2  
+
 
 def setup_logging(log_dir):
     os.makedirs(log_dir, exist_ok=True)
@@ -19,7 +18,8 @@ def setup_logging(log_dir):
     log_filename = f"{log_dir}/training_log_{timestamp}.txt"
     return open(log_filename, 'w')
 
-def train(env, model, reference_model, optimizer, epoch, gamma, n_step, epsilon, log_dir, model_dir):
+
+def train(env, model, reference_model, optimizer, log_dir, model_dir, epoch=1000, gamma=0.99, n_step=4, epsilon=0.2):
     log_file = setup_logging(log_dir)
     try:
         report_old_model_distribution(reference_model, env, log_file)
@@ -47,19 +47,24 @@ def train(env, model, reference_model, optimizer, epoch, gamma, n_step, epsilon,
                 state = next_state
 
             returns = get_discounted_rewards(model.rewards, gamma)
-            log_nstep_cp_new = nstep_cumulative_prob_from_logs(n_step,model.log_probs)
-            log_nstep_cp_old = nstep_cumulative_prob_from_states(reference_model, n_step, model.state_trajectory, model.action_trajectory)
+            log_nstep_cp_new = nstep_cumulative_prob_from_logs(n_step, model.log_probs)
+            log_nstep_cp_old = nstep_cumulative_prob_from_states(reference_model, n_step, model.state_trajectory,
+                                                                 model.action_trajectory)
 
             # Log before update
             log(f"\nEpisode {episode} - Before Update:", log_file)
             log(f"{'State':>30} | {'Action':>6} | {'New CP':>10} | {'Old CP':>10} | {'Update':>6}", log_file)
             log("-" * 70, log_file)
-            for state_tensor, action, log_cp_new, log_cp_old in zip(model.state_trajectory, model.action_trajectory, log_nstep_cp_new, log_nstep_cp_old):
+            for state_tensor, action, log_cp_new, log_cp_old, ret, value in zip(model.state_trajectory,
+                                                                                model.action_trajectory,
+                                                                                log_nstep_cp_new, log_nstep_cp_old,
+                                                                                returns, model.values):
                 state_repr = ' '.join(f"{x:.2f}" for x in state_tensor.detach().numpy().flatten())
                 cp_new = torch.exp(log_cp_new).item()
                 cp_old = torch.exp(log_cp_old).item()
-                update_decision = "Yes" if should_update(log_cp_new, log_cp_old, epsilon) else "No"
-                log(f"{state_repr:>30} | {action.item():>6} | {cp_new:>10.4f} | {cp_old:>10.4f} | {update_decision:>6}", log_file)
+                update_decision = "Yes" if should_update(log_cp_new, log_cp_old, epsilon, ret - value) else "No"
+                log(f"{state_repr:>30} | {action.item():>6} | {cp_new:>10.4f} | {cp_old:>10.4f} | {update_decision:>6}",
+                    log_file)
 
             actor_loss, critic_loss = bprop_with_cumulative_prob(
                 model.log_probs,
@@ -92,6 +97,7 @@ def train(env, model, reference_model, optimizer, epoch, gamma, n_step, epsilon,
         log_file.close()
     return model
 
+
 def main():
     # Initialize environment and models
     env = SimpleGridEnv()
@@ -104,8 +110,9 @@ def main():
     model_dir = "./trained_models"
 
     # Train the model
-    trained_model = train(env, model, reference_model, optimizer, epoch, gamma, n_step, epsilon, log_dir, model_dir)
+    trained_model = train(env, model, reference_model, optimizer, 1000, 0.99, 4, 0.2, log_dir, model_dir)
     print("Training complete!")
+
 
 if __name__ == "__main__":
     main()
