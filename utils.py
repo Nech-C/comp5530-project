@@ -1,12 +1,15 @@
 # utils.py:
+
 import torch
 import torch.nn as nn
 import numpy as np
 import random
+import os
 from scipy.stats import entropy
 from gym import spaces
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import jensenshannon
+from math import floor
 
 
 class ActorCritic(nn.Module):
@@ -41,6 +44,18 @@ def log(message, file_object=None):
     if file_object:
         print(message, file=file_object)
         file_object.flush()
+
+
+def load_models_from_directory(directory):
+    models = []
+    for filename in os.listdir(directory):
+        if filename.endswith(".pth"):
+            model_path = os.path.join(directory, filename)
+            model = ActorCritic()
+            model.load_state_dict(torch.load(model_path))
+            model.eval()
+            models.append(model)
+    return models
 
 
 def get_discounted_rewards(rewards, gamma):
@@ -109,20 +124,36 @@ def nstep_cumulative_prob_from_states(model, n_step, states, actions):
 
 
 def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old, epsilon, optimizer):
-    """Update the model using the PPO algorithm with clipping."""
+    """Update the model using a modified PPO algorithm with custom update rules."""
     actor_loss = []
     critic_loss = []
 
     for log_prob, value, R, log_cp, log_cp_old in zip(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old):
         advantage = R - value.item()
-        ratio = torch.exp(log_cp - log_cp_old)  # PPO's probability ratio
-        surr1 = ratio * advantage
-        surr2 = torch.clamp(ratio, 1 - epsilon, 1 + epsilon) * advantage
-        actor_loss.append(-torch.min(surr1, surr2))
-        critic_loss.append(nn.functional.mse_loss(value.flatten(), torch.tensor([R], dtype=torch.float)))
+        ratio = torch.exp(log_cp - log_cp_old)  # ratio of new CP to old CP
 
-    actor_loss = torch.stack(actor_loss).sum() if actor_loss else torch.tensor(0.0)
-    critic_loss = torch.stack(critic_loss).sum() if critic_loss else torch.tensor(0.0)
+        # Determine if an update should happen
+        update = False
+        if ratio < 1 - epsilon or ratio > 1 + epsilon:
+            update = True  # Rule 1: ratio is significantly different
+        elif advantage < 0 and ratio < 1:
+            update = True  # Rule 2: Advantage negative, ratio less than 1
+        elif advantage > 0 and ratio > 1:
+            update = True  # Rule 3: Advantage positive, ratio more than 1
+
+        # Calculate surrogate loss
+        if update:
+            surr = -log_prob * advantage  # Policy gradient loss
+        else:
+            surr = torch.zeros_like(log_prob)  # Zero tensor of the same size
+
+        actor_loss.append(surr)
+        critic_loss.append(
+            nn.functional.mse_loss(value.flatten(), torch.tensor([R]), reduction='sum'))  # Always calculate critic loss
+
+    # Sum up the losses
+    actor_loss = torch.sum(torch.stack(actor_loss))
+    critic_loss = torch.sum(torch.stack(critic_loss))
     total_loss = actor_loss + critic_loss
 
     optimizer.zero_grad()
@@ -132,14 +163,100 @@ def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nst
     return actor_loss.item(), critic_loss.item()
 
 
-def bprop_with_log_prob():
-    ...
-
-
-def should_update(log_cp_new, log_cp_old, epsilon):
+def should_update(log_cp_new, log_cp_old, epsilon, advantage):
     """Check if model's counterfactual probabilities suggest an update."""
     ratio = torch.exp(log_cp_new - log_cp_old)
-    return ratio < (1 - epsilon) or ratio > (1 + epsilon)
+    update = False
+    if ratio < 1 - epsilon or ratio > 1 + epsilon:
+        update = True  # Rule 1: ratio is significantly different
+    elif advantage < 0 and ratio < 1:
+        update = True  # Rule 2: Advantage negative, ratio less than 1
+    elif advantage > 0 and ratio > 1:
+        update = True  # Rule 3: Advantage positive, ratio more than 1
+    return update
+
+
+def single_CPGPO(env, model, reference_model, optimizer, epoch, gamma, starting_n, n_growth, max_n, epsilon,
+                 epsilon_decay, min_epsilon):
+    for episode in range(epoch):
+        # Adjust n and epsilon as training progresses
+        n_step = min(floor(starting_n + episode * n_growth), max_n)
+        epsilon = max(epsilon * (1. / (1 + epsilon_decay * episode)), min_epsilon)
+
+        state = env.reset()
+        done = False
+        model.reset_trajectory()
+
+        while not done:
+            state_tensor = torch.FloatTensor(state).reshape(1, -1)
+            action_prob, value = model(state_tensor)
+            action_dist = torch.distributions.Categorical(action_prob)
+            action = action_dist.sample()
+            next_state, reward, done, _ = env.step(action.item())
+            log_prob = action_dist.log_prob(action)
+
+            model.log_probs.append(log_prob)
+            model.values.append(value)
+            model.rewards.append(reward)
+            model.state_trajectory.append(state_tensor)
+            model.action_trajectory.append(action)
+
+            state = next_state
+
+        returns = get_discounted_rewards(model.rewards, gamma)
+        log_nstep_cp_new = nstep_cumulative_prob_from_logs(n_step, model.log_probs)
+        log_nstep_cp_old = nstep_cumulative_prob_from_states(reference_model, n_step, model.state_trajectory,
+                                                             model.action_trajectory)
+
+        actor_loss, critic_loss = bprop_with_cumulative_prob(
+            model.log_probs,
+            model.values,
+            returns,
+            log_nstep_cp_new,
+            log_nstep_cp_old,
+            epsilon,
+            optimizer
+        )
+
+    return model
+
+
+def should_update(log_cp_new, log_cp_old, epsilon, advantage):
+    """Check if model's counterfactual probabilities suggest an update."""
+    ratio = torch.exp(log_cp_new - log_cp_old)
+    update = False
+    if ratio < 1 - epsilon or ratio > 1 + epsilon:
+        update = True  # Rule 1: ratio is significantly different
+    elif advantage < 0 and ratio < 1:
+        update = True  # Rule 2: Advantage negative, ratio less than 1
+    elif advantage > 0 and ratio > 1:
+        update = True  # Rule 3: Advantage positive, ratio more than 1
+    return update
+
+
+# baseline algo related
+def bprop_with_log_prob(log_probs, values, returns, optimizer):
+    """
+    Perform backpropagation with log probabilities for A2C model.
+
+    Args:
+        log_probs (list): List of log probabilities from the policy network.
+        values (list): List of value estimates from the value network.
+        returns (list): List of discounted return values.
+        optimizer (torch.optim.Optimizer): Optimizer for the model.
+    """
+    policy_losses = []
+    value_losses = []
+
+    for log_prob, value, R in zip(log_probs, values, returns):
+        advantage = R - value.item()
+        policy_losses.append(-log_prob * advantage)  # Policy gradient loss
+        value_losses.append(nn.functional.mse_loss(value.squeeze(), R))  # Value loss
+
+    optimizer.zero_grad()
+    loss = torch.stack(policy_losses).sum() + torch.stack(value_losses).sum()  # Total loss
+    loss.backward()
+    optimizer.step()
 
 
 def load_reference_models(model_list, n):
@@ -283,6 +400,7 @@ def bprop_with_ppo(log_probs, values, entropies, returns, epsilon, beta, optimiz
     optimizer.step()
 
 
+# Policy Evaluation:
 def evaluate_model(model, env, num_runs):
     """
     Evaluate the given model in the environment.
@@ -473,3 +591,15 @@ def jensen_shannon_divergence(dists):
             total_js_div += js_div_ij
             count += 1
     return total_js_div / count if count > 0 else 0
+
+
+def load_models_from_directory(directory):
+    models = []
+    for filename in os.listdir(directory):
+        if filename.endswith(".pth"):
+            model_path = os.path.join(directory, filename)
+            model = ActorCritic()
+            model.load_state_dict(torch.load(model_path))
+            model.eval()
+            models.append(model)
+    return models
