@@ -1,7 +1,36 @@
 # grid_world_2d.py
 import gym
+import torch
 from gym import spaces
 import numpy as np
+from torch import nn
+
+
+class ActorCritic2D(nn.Module):
+    def __init__(self):
+        super(ActorCritic2D, self).__init__()
+        self.rewards = None
+        self.values = None
+        self.log_probs = None
+        self.action_trajectory = None
+        self.state_trajectory = None
+        self.fc = nn.Linear(9, 32)
+        self.actor = nn.Linear(32, 4)
+        self.critic = nn.Linear(32, 1)
+        self.reset_trajectory()
+
+    def forward(self, x):
+        x = torch.relu(self.fc(x))
+        action_prob = torch.softmax(self.actor(x), dim=-1)
+        value = self.critic(x)
+        return action_prob, value
+
+    def reset_trajectory(self):
+        self.state_trajectory = []  # To store states
+        self.action_trajectory = []  # To store actions
+        self.log_probs = []  # Log probabilities
+        self.values = []  # Value estimates
+        self.rewards = []  # Observed rewards
 
 
 class SimpleGridEnv2D(gym.Env):
@@ -14,51 +43,61 @@ class SimpleGridEnv2D(gym.Env):
 
         self.grid = np.array([
             [0.5, -0.2, 0.1, 0.4, -0.3, 0.0, -0.5, 0.2, 0.0, -0.1],
-            [0.3, -0.4, 0.2, 0.1, -0.2, 0.4, -0.2, 0.1, 0.3, -0.5],
+            [0.3, -0.4, 0.2, 0.1, -0.2, 0.4, -0.2, 1.0, 0.3, -0.5],
             [-0.1, 0.0, 0.5, -0.2, 0.1, 0.4, -0.3, 0.0, -0.5, 0.2],
-            [0.0, -0.1, 0.3, -0.4, 0.2, 0.4, -0.2, 0.1, 0.5, -0.1],
-            [0.2, 0.4, -0.2, 0.1, 0.3, -0.5, 0.1, 0.0, -0.4, 0.2],
-            [-0.5, 0.2, 0.0, -0.1, 0.5, -0.2, 0.1, 0.4, -0.3, 0.0],
-            [0.1, 0.4, -0.3, 0.0, -0.5, 0.2, 0.0, -0.1, 0.3, -0.4],
-            [0.4, -0.2, 0.1, 0.3, -0.4, 0.2, 0.1, -0.2, 0.4, -0.2],
-            [-0.2, 0.1, 0.5, -0.1, 0.0, -0.5, 0.2, 0.4, -0.2, 0.1],
+            [-0.0, -0.1, -0.3, -0.4, 0.2, 0.4, -0.2, 0.1, 0.5, -0.1],
+            [-0.2, -0.4, -0.2, -0.1, 0.3, -0.5, 0.1, 0.0, -0.4, 0.2],
+            [0.5, 0.6, 0.0, -0.1, 0.5, -0.2, 0.1, 0.4, -0.3, 0.0],
+            [0.5, 0.4, 0.3, 0.0, -0.5, 0.2, 0.0, -0.1, 0.3, -0.4],
+            [0.4, 0.2, 0.1, 0.3, -0.4, 0.2, 0.1, -0.2, 0.4, -0.2],
+            [0.2, 0.1, 0.5, 0.1, 0.0, -0.5, 0.2, 0.4, -0.2, 0.1],
             [0.1, 0.3, -0.4, 0.2, 0.4, -0.2, 0.1, 0.5, -0.1, 0.0]
         ])
-        self.current_position = [0, 0]  # Starting position
+        self.current_position = [1, 1]  # Starting position
         self.step_count = 0
 
     def reset(self):
-        self.current_position = [0, 0]
+        self.current_position = [1, 1]
         self.step_count = 0
         return self.get_local_observation()
 
     def step(self, action):
-        if action == 0 and self.current_position[0] > 0:
+        # Restrict movement so that the agent stays within the bounds where a 3x3 observation is possible
+        if action == 0 and self.current_position[0] > 1:
             self.current_position[0] -= 1
-        elif action == 1 and self.current_position[0] < self.grid_size[0] - 1:
+        elif action == 1 and self.current_position[0] < self.grid_size[0] - 2:
             self.current_position[0] += 1
-        elif action == 2 and self.current_position[1] > 0:
+        elif action == 2 and self.current_position[1] > 1:
             self.current_position[1] -= 1
-        elif action == 3 and self.current_position[1] < self.grid_size[1] - 1:
+        elif action == 3 and self.current_position[1] < self.grid_size[1] - 2:
             self.current_position[1] += 1
 
         self.step_count += 1
         reward = self.grid[self.current_position[0], self.current_position[1]]
-        done = self.step_count >= 10
+        done = self.step_count >= 10 # Adjust as per your requirement
 
         return self.get_local_observation(), reward, done, {'position': self.current_position}
 
     def get_local_observation(self):
-        grid_padded = np.pad(self.grid, 1, mode='constant', constant_values=0)
-        x, y = self.current_position[0] + 1, self.current_position[1] + 1
-        observation = grid_padded[x - 1:x + 2, y - 1:y + 2]
+        x, y = self.current_position
+        observation = self.grid[x - 1:x + 2, y - 1:y + 2]
         return observation
 
     def all_states(self):
-        return [self.grid[i, j] for i in range(self.grid_size[0]) for j in range(self.grid_size[1])]
+        # Return all possible 3x3 observations
+        all_observations = []
+        for i in range(1, self.grid_size[0] - 1):
+            for j in range(1, self.grid_size[1] - 1):
+                observation = self.grid[i - 1:i + 2, j - 1:j + 2]
+                all_observations.append(observation)
+        return all_observations
 
     def get_grid_size(self):
         return self.grid_size
+
+    def get_observation_size(self):
+        return 9
+
 
 
 def run():

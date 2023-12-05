@@ -8,6 +8,8 @@ import torch.optim as optim
 import numpy as np
 
 
+
+
 class SimpleGridEnv(gym.Env):
     def __init__(self):
         super(SimpleGridEnv, self).__init__()
@@ -52,7 +54,8 @@ class SimpleGridEnv(gym.Env):
     def get_grid_size(self):
         return len(self.grid)
 
-
+    def get_observation_size(self):
+        return 3
 def run():
     env = SimpleGridEnv()
     obs = env.reset()
