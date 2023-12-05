@@ -74,7 +74,7 @@ def report_old_model_distribution(model, env, file_object):
     """Report action probability distribution of the old model."""
     log("Old Model Action Probability Distribution:", file_object)
     for state in env.all_states():
-        state_tensor = torch.FloatTensor(state).reshape(1, 3).float()
+        state_tensor = torch.FloatTensor(state).reshape(1, env.get_observation_size()).float()
         action_prob, _ = model(state_tensor)
         log(f"State: {state} - Action Probabilities: {action_prob.detach().numpy()}", file_object)
 
@@ -176,12 +176,16 @@ def should_update(log_cp_new, log_cp_old, epsilon, advantage):
     return update
 
 
-def single_CPGPO(env, model, reference_model, optimizer, epoch, gamma, starting_n, n_growth, max_n, epsilon,
-                 epsilon_decay, min_epsilon):
-    for episode in range(epoch):
+def single_CPGPO(env, model, reference_model, config):
+    """
+    Train the model using the CPGPO algorithm with cumulative probability in the objective function,
+    growing n, and decreasing epsilon.
+    """
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
+    for episode in range(config['epoch']):
         # Adjust n and epsilon as training progresses
-        n_step = min(floor(starting_n + episode * n_growth), max_n)
-        epsilon = max(epsilon * (1. / (1 + epsilon_decay * episode)), min_epsilon)
+        n_step = min(floor(config['starting_n'] + episode * config['n_growth']), config['max_n'])
+        epsilon = max(config['epsilon'] * (1. / (1 + config['epsilon_decay'] * episode)), config['min_epsilon'])
 
         state = env.reset()
         done = False
@@ -203,7 +207,7 @@ def single_CPGPO(env, model, reference_model, optimizer, epoch, gamma, starting_
 
             state = next_state
 
-        returns = get_discounted_rewards(model.rewards, gamma)
+        returns = get_discounted_rewards(model.rewards, config['gamma'])
         log_nstep_cp_new = nstep_cumulative_prob_from_logs(n_step, model.log_probs)
         log_nstep_cp_old = nstep_cumulative_prob_from_states(reference_model, n_step, model.state_trajectory,
                                                              model.action_trajectory)
@@ -271,12 +275,13 @@ def load_reference_models(model_list, n):
     return reference_models
 
 
-def train_a2c(env, num_episodes, learning_rate, gamma, save_path=None):
+def train_a2c(env, model, num_episodes, learning_rate, gamma, save_path=None):
     """
     Train an Actor-Critic model.
-    
+
     Args:
         env: The environment to train on.
+        model: model to be trained
         num_episodes (int): The number of episodes to train for.
         learning_rate (float): Learning rate for the optimizer.
         gamma (float): Discount factor for rewards.
@@ -285,7 +290,6 @@ def train_a2c(env, num_episodes, learning_rate, gamma, save_path=None):
     Returns:
         The trained ActorCritic model.
     """
-    model = ActorCritic()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     for episode in range(num_episodes):
@@ -294,7 +298,7 @@ def train_a2c(env, num_episodes, learning_rate, gamma, save_path=None):
         model.reset_trajectory()
 
         while not done:
-            state_tensor = torch.FloatTensor(state).reshape(1, 3).float()
+            state_tensor = torch.FloatTensor(state).reshape(1, env.get_observation_size()).float()
             action_probs, value = model(state_tensor)
             action_dist = torch.distributions.Categorical(action_probs)
             action = action_dist.sample()
@@ -320,7 +324,7 @@ def train_a2c(env, num_episodes, learning_rate, gamma, save_path=None):
 def train_ppo(env, num_episodes, learning_rate, gamma, epsilon, beta, save_path=None):
     """
     Train a PPO model.
-    
+
     Args:
         env: The environment to train on.
         num_episodes (int): The number of episodes to train for.
@@ -342,7 +346,7 @@ def train_ppo(env, num_episodes, learning_rate, gamma, epsilon, beta, save_path=
         model.reset_trajectory()
 
         while not done:
-            state_tensor = torch.FloatTensor(state).reshape(1, 3).float()
+            state_tensor = torch.FloatTensor(state).reshape(1, env.get_observation_size()).float()
             action_probs, value = model(state_tensor)
             action_dist = torch.distributions.Categorical(action_probs)
             action = action_dist.sample()
@@ -401,19 +405,10 @@ def bprop_with_ppo(log_probs, values, entropies, returns, epsilon, beta, optimiz
 
 
 # Policy Evaluation:
+
 def evaluate_model(model, env, num_runs):
-    """
-    Evaluate the given model in the environment.
-
-    Args:
-        model (nn.Module): The trained model to evaluate.
-        env: The environment to evaluate the model on.
-        num_runs (int): Number of runs to perform the evaluation.
-
-    Returns:
-        float: The average reward over the specified number of runs.
-    """
     total_reward = 0.0
+    visitation_matrix = np.zeros(env.get_grid_size())
 
     for _ in range(num_runs):
         state = env.reset()
@@ -421,18 +416,40 @@ def evaluate_model(model, env, num_runs):
         episode_reward = 0.0
 
         while not done:
-            state_tensor = torch.FloatTensor(state).reshape(1, 3).float()
+            state_tensor = torch.FloatTensor(state.ravel()).unsqueeze(0)  # Flatten the state
             action_probs, _ = model(state_tensor)
-            action = torch.argmax(action_probs).item()  # Choose the action with highest probability
+            action = torch.argmax(action_probs).item()
             next_state, reward, done, _ = env.step(action)
 
             episode_reward += reward
             state = next_state
+            update_visitation_matrix(visitation_matrix, env.current_position)  # Assuming this function is defined
 
         total_reward += episode_reward
 
     average_reward = total_reward / num_runs
-    return average_reward
+    return average_reward, visitation_matrix
+
+
+def evaluate_group(models, num_episodes, env_class, utils_module):
+    total_reward = 0
+    total_visitation = np.zeros((10, 10))  # Assuming a 10x10 grid
+    prob_dists = []
+
+    for model in models:
+        env = env_class()
+        average_reward = utils_module.evaluate_model(model, env, num_episodes)
+        total_reward += average_reward
+
+        # Assuming you have a function to compute visitation frequency
+        visitation_matrix = utils_module.compute_visitation_frequency(model, env, num_episodes)
+        total_visitation += visitation_matrix
+
+        # Assuming you have a function to get all action probability distributions
+        action_prob_dists = utils_module.all_action_prob_dists(env.all_states(), model)
+        prob_dists.append(action_prob_dists)
+
+    return total_reward, total_visitation, prob_dists
 
 
 def grid_state_visitation_eval(policy, env, num_runs):
@@ -470,6 +487,21 @@ def grid_state_visitation_eval(policy, env, num_runs):
     return visitation_matrix
 
 
+def compute_visitation_matrix(model, env, num_runs):
+    visitation_matrix = np.zeros(env.get_grid_size())
+    for _ in range(num_runs):
+        state = env.reset()
+        done = False
+        while not done:
+            state_tensor = torch.FloatTensor(state).reshape(1, -1)
+            action_probs, _ = model(state_tensor)
+            action = torch.argmax(action_probs).item()
+            _, _, done, info = env.step(action)
+            x, y = info['position']
+            visitation_matrix[x, y] += 1
+    return visitation_matrix
+
+
 def update_visitation_matrix(matrix, position):
     """
     Update the visitation matrix based on the agent's position.
@@ -478,10 +510,13 @@ def update_visitation_matrix(matrix, position):
         matrix (numpy.ndarray): The visitation matrix.
         position (int or tuple): The agent's position.
     """
-    if isinstance(position, int):  # 1D position
+    if isinstance(position, int):
+        # 1D position
         matrix[position] += 1
-    elif isinstance(position, tuple) and len(position) == 2:  # 2D position
-        matrix[position[0], position[1]] += 1
+    elif isinstance(position, (list, tuple)) and len(position) == 2:
+        # 2D position
+        x, y = position
+        matrix[x, y] += 1
     else:
         raise ValueError("Unsupported position format")
 
@@ -499,7 +534,8 @@ def all_action_prob_dists(states, model):
     """
     prob_dists = []
     for state in states:
-        state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        # Flatten the state before passing it to the model
+        state_tensor = torch.FloatTensor(state.ravel()).unsqueeze(0)
         with torch.no_grad():
             action_probs, _ = model(state_tensor)
             prob_dists.append(action_probs.numpy())
