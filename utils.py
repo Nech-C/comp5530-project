@@ -407,6 +407,9 @@ def bprop_with_ppo(log_probs, values, entropies, returns, epsilon, beta, optimiz
 # Policy Evaluation:
 
 def evaluate_model(model, env, num_runs):
+    """
+        for visitation and average_reward
+    """
     total_reward = 0.0
     visitation_matrix = np.zeros(env.get_grid_size())
 
