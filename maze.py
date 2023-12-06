@@ -25,15 +25,28 @@ DEF_PORTAL_PAIRS = {(0, 9): (8, 0), (8, 0): (0, 9)}
 class ActorCriticMaze(nn.Module):
     def __init__(self):
         super(ActorCriticMaze, self).__init__()
+        self.rewards = None
+        self.values = None
+        self.log_probs = None
+        self.action_trajectory = None
+        self.state_trajectory = None
         self.fc = nn.Linear(25, 32)
         self.actor = nn.Linear(32, 6)
         self.critic = nn.Linear(32, 1)
+        self.reset_trajectory()
 
     def forward(self, x):
         x = torch.relu(self.fc(x))
         action_prob = torch.softmax(self.actor(x), dim=-1)
         value = self.critic(x)
         return action_prob, value
+
+    def reset_trajectory(self):
+        self.state_trajectory = []  # To store states
+        self.action_trajectory = []  # To store actions
+        self.log_probs = []  # Log probabilities
+        self.values = []  # Value estimates
+        self.rewards = []  # Observed rewards
 
 # Maze Environment
 class MazeEnv(gym.Env):
@@ -70,6 +83,7 @@ class MazeEnv(gym.Env):
         self.observation_space = spaces.Box(low=0, high=6, shape=(self.observation_size**2,), dtype=int)
 
     def step(self, action):
+        # self.print_maze_with_agent()
         self.num_steps += 1
 
         # Handle action
@@ -85,7 +99,9 @@ class MazeEnv(gym.Env):
         # Get observation, reward, done, info
         observation = self.get_observation()
         reward = self.get_reward()
-        done = self.current_position == self.goal or self.num_steps > 60
+        done = self.current_position == self.goal or self.num_steps > 240
+        if self.current_position == self.goal:
+            print("goal!")
         info = {}
 
         return observation, reward, done, info
@@ -126,17 +142,24 @@ class MazeEnv(gym.Env):
 
     def get_observation(self):
         obs = np.zeros((self.observation_size, self.observation_size), dtype=int)
-        start_x = max(0, self.current_position[0] - 2)
-        start_y = max(0, self.current_position[1] - 2)
-        end_x = min(self.size, start_x + self.observation_size)
-        end_y = min(self.size, start_y + self.observation_size)
-        for i in range(start_x, end_x):
-            for j in range(start_y, end_y):
-                obs_x, obs_y = i - start_x, j - start_y
-                if i < self.size and j < self.size:
-                    obs[obs_x, obs_y] = self.maze[i, j]
+
+        # Calculate the bounds of the observation window centered around the agent
+        start_x = self.current_position[0] - 2
+        start_y = self.current_position[1] - 2
+
+        for i in range(self.observation_size):
+            for j in range(self.observation_size):
+                # Map the observation window to the maze coordinates
+                maze_x = start_x + i
+                maze_y = start_y + j
+
+                if 0 <= maze_x < self.size and 0 <= maze_y < self.size:
+                    # Copy the maze value if within bounds
+                    obs[i, j] = self.maze[maze_x, maze_y]
                 else:
-                    obs[obs_x, obs_y] = 0  # Void grid
+                    # Fill with 0 if out of bounds
+                    obs[i, j] = 0
+
         return obs.flatten()
 
     def get_reward(self):
@@ -149,6 +172,11 @@ class MazeEnv(gym.Env):
         self.maze = np.array(DEF_MAZE, dtype=int)
         return self.get_observation()
 
+    def get_observation_size(self):
+        return self.observation_size ** 2
+
+    def get_grid_size(self):
+        return self.maze.shape
     def play(self):
         print("Starting position:", self.current_position)
         print("Goal:", self.goal)
@@ -178,7 +206,8 @@ class MazeEnv(gym.Env):
         maze_copy = np.array(self.maze, copy=True)
         maze_copy[self.current_position] = 7
         print(maze_copy)
-
+        print("obs:", self.get_observation().reshape((5,5)))
+        print("pos:", self.current_position)
 # Example usage
 if __name__ == "__main__":
     env = MazeEnv()
