@@ -123,8 +123,7 @@ def nstep_cumulative_prob_from_states(model, n_step, states, actions):
     return nstep_cumulative_prob_from_logs(n_step, torch.stack(log_probs))
 
 
-def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old, epsilon, optimizer):
-    """Update the model using a modified PPO algorithm with custom update rules."""
+def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old, epsilon, optimizer, device):
     actor_loss = []
     critic_loss = []
 
@@ -135,21 +134,22 @@ def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nst
         # Determine if an update should happen
         update = False
         if ratio < 1 - epsilon or ratio > 1 + epsilon:
-            update = True  # Rule 1: ratio is significantly different
+            update = True
         elif advantage < 0 and ratio < 1:
-            update = True  # Rule 2: Advantage negative, ratio less than 1
+            update = True
         elif advantage > 0 and ratio > 1:
-            update = True  # Rule 3: Advantage positive, ratio more than 1
+            update = True
 
         # Calculate surrogate loss
         if update:
-            surr = -log_prob * advantage  # Policy gradient loss
+            surr = -log_prob * advantage
         else:
-            surr = torch.zeros_like(log_prob)  # Zero tensor of the same size
+            surr = torch.zeros_like(log_prob)
 
         actor_loss.append(surr)
-        critic_loss.append(
-            nn.functional.mse_loss(value.flatten(), torch.tensor([R]), reduction='sum'))  # Always calculate critic loss
+        # Move R to the same device as value before calculating mse_loss
+        R_tensor = torch.tensor([R], device=device)
+        critic_loss.append(nn.functional.mse_loss(value.flatten(), R_tensor, reduction='sum'))
 
     # Sum up the losses
     actor_loss = torch.sum(torch.stack(actor_loss))
@@ -163,6 +163,7 @@ def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nst
     return actor_loss.item(), critic_loss.item()
 
 
+
 def should_update(log_cp_new, log_cp_old, epsilon, advantage):
     """Check if model's counterfactual probabilities suggest an update."""
     ratio = torch.exp(log_cp_new - log_cp_old)
@@ -176,13 +177,18 @@ def should_update(log_cp_new, log_cp_old, epsilon, advantage):
     return update
 
 
-def single_CPGPO(env, model, reference_model, config):
+def single_CPGPO(env, model, reference_model, config, device):
     """
     Train the model using the CPGPO algorithm with cumulative probability in the objective function,
     growing n, and decreasing epsilon.
     """
+    # Move models to the specified device
+    model = model.to(device)
+    reference_model = reference_model.to(device)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
     for episode in range(config['epoch']):
+        print(episode)
         # Adjust n and epsilon as training progresses
         n_step = min(floor(config['starting_n'] + episode * config['n_growth']), config['max_n'])
         epsilon = max(config['epsilon'] * (1. / (1 + config['epsilon_decay'] * episode)), config['min_epsilon'])
@@ -192,13 +198,14 @@ def single_CPGPO(env, model, reference_model, config):
         model.reset_trajectory()
 
         while not done:
-            state_tensor = torch.FloatTensor(state).reshape(1, -1)
+            state_tensor = torch.FloatTensor(state).to(device).reshape(1, -1)
             action_prob, value = model(state_tensor)
             action_dist = torch.distributions.Categorical(action_prob)
             action = action_dist.sample()
             next_state, reward, done, _ = env.step(action.item())
             log_prob = action_dist.log_prob(action)
 
+            # Storing trajectories
             model.log_probs.append(log_prob)
             model.values.append(value)
             model.rewards.append(reward)
@@ -207,11 +214,12 @@ def single_CPGPO(env, model, reference_model, config):
 
             state = next_state
 
-        returns = get_discounted_rewards(model.rewards, config['gamma'])
+        # Calculating returns and cumulative probabilities
+        returns = get_discounted_rewards(model.rewards, config['gamma']).to(device)
         log_nstep_cp_new = nstep_cumulative_prob_from_logs(n_step, model.log_probs)
-        log_nstep_cp_old = nstep_cumulative_prob_from_states(reference_model, n_step, model.state_trajectory,
-                                                             model.action_trajectory)
+        log_nstep_cp_old = nstep_cumulative_prob_from_states(reference_model, n_step, model.state_trajectory, model.action_trajectory)
 
+        # Backpropagation with custom update rules
         actor_loss, critic_loss = bprop_with_cumulative_prob(
             model.log_probs,
             model.values,
@@ -219,24 +227,11 @@ def single_CPGPO(env, model, reference_model, config):
             log_nstep_cp_new,
             log_nstep_cp_old,
             epsilon,
-            optimizer
+            optimizer,
+            device
         )
 
     return model
-
-
-def should_update(log_cp_new, log_cp_old, epsilon, advantage):
-    """Check if model's counterfactual probabilities suggest an update."""
-    ratio = torch.exp(log_cp_new - log_cp_old)
-    update = False
-    if ratio < 1 - epsilon or ratio > 1 + epsilon:
-        update = True  # Rule 1: ratio is significantly different
-    elif advantage < 0 and ratio < 1:
-        update = True  # Rule 2: Advantage negative, ratio less than 1
-    elif advantage > 0 and ratio > 1:
-        update = True  # Rule 3: Advantage positive, ratio more than 1
-    return update
-
 
 # baseline algo related
 def bprop_with_log_prob(log_probs, values, returns, optimizer):
@@ -275,30 +270,17 @@ def load_reference_models(model_list, n):
     return reference_models
 
 
-def train_a2c(env, model, num_episodes, learning_rate, gamma, save_path=None):
-    """
-    Train an Actor-Critic model.
-
-    Args:
-        env: The environment to train on.
-        model: model to be trained
-        num_episodes (int): The number of episodes to train for.
-        learning_rate (float): Learning rate for the optimizer.
-        gamma (float): Discount factor for rewards.
-        save_path (str, optional): Path to save the trained model.
-
-    Returns:
-        The trained ActorCritic model.
-    """
+def train_a2c(env, model, num_episodes, learning_rate, gamma, device=None):
+    model = model.to(device)  # Move model to specified device
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     for episode in range(num_episodes):
         state = env.reset()
         done = False
         model.reset_trajectory()
-
+        print(episode)
         while not done:
-            state_tensor = torch.FloatTensor(state).reshape(1, env.get_observation_size()).float()
+            state_tensor = torch.FloatTensor(state).reshape(1, env.get_observation_size()).to(device)
             action_probs, value = model(state_tensor)
             action_dist = torch.distributions.Categorical(action_probs)
             action = action_dist.sample()
@@ -311,14 +293,13 @@ def train_a2c(env, model, num_episodes, learning_rate, gamma, save_path=None):
 
             state = next_state
 
-        # Update the model at the end of each episode
-        returns = get_discounted_rewards(model.rewards, gamma)
+        returns = get_discounted_rewards(model.rewards, gamma).to(device)
         bprop_with_log_prob(model.log_probs, model.values, returns, optimizer)
 
-    if save_path:
-        torch.save(model.state_dict(), save_path)
+
 
     return model
+
 
 
 def train_ppo(env, num_episodes, learning_rate, gamma, epsilon, beta, save_path=None):
@@ -406,7 +387,7 @@ def bprop_with_ppo(log_probs, values, entropies, returns, epsilon, beta, optimiz
 
 # Policy Evaluation:
 
-def evaluate_model(model, env, num_runs):
+def evaluate_model(model, env, num_runs, device):
     """
         for visitation and average_reward
     """
@@ -419,7 +400,7 @@ def evaluate_model(model, env, num_runs):
         episode_reward = 0.0
 
         while not done:
-            state_tensor = torch.FloatTensor(state.ravel()).unsqueeze(0)  # Flatten the state
+            state_tensor = torch.FloatTensor(state.ravel()).unsqueeze(0).to(device)  # Flatten the state
             action_probs, _ = model(state_tensor)
             action = torch.argmax(action_probs).item()
             next_state, reward, done, _ = env.step(action)
