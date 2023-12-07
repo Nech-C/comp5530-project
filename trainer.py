@@ -119,16 +119,27 @@ def train_and_eval_maze(num_agents, num_episodes, path_a2c, path_cpgpo, config):
         os.makedirs(path_cpgpo)
 
     # Train A2C Agents
+    # a2c_models = []
+    # for i in range(num_agents):
+    #     env = MazeEnv()  # Define your maze settings here
+    #     model = ActorCriticMaze().to(device)  # Move model to device
+    #     trained_model = utils.train_a2c(env, model, num_episodes, config['learning_rate'], config['gamma'], device)
+    #     model_save_path = os.path.join(path_a2c, f"a2c_maze_model_{i}.pth")
+    #     torch.save(trained_model.state_dict(), model_save_path)
+    #     a2c_models.append(trained_model)
+
+
+    # after training a2c
     a2c_models = []
-    for i in range(num_agents):
-        env = MazeEnv()  # Define your maze settings here
-        model = ActorCriticMaze().to(device)  # Move model to device
-        trained_model = utils.train_a2c(env, model, num_episodes, config['learning_rate'], config['gamma'], device)
-        model_save_path = os.path.join(path_a2c, f"a2c_maze_model_{i}.pth")
-        torch.save(trained_model.state_dict(), model_save_path)
-        a2c_models.append(trained_model)
-    return
-    # Train CPGPO Agents
+    for filename in os.listdir(path_a2c):
+        if filename.endswith(".pth"):
+            model_path = os.path.join(path_a2c, filename)
+            model = ActorCriticMaze().to(device)  # Initialize and move model to device
+            model.load_state_dict(torch.load(model_path))
+            model.eval()  # Set model to evaluation mode
+            a2c_models.append(model)
+
+    # Train CPGPO Agents# Train CPGPO Agents
     cpgpo_models = []
     all_models = a2c_models.copy()
     for i in range(num_agents):
@@ -140,6 +151,7 @@ def train_and_eval_maze(num_agents, num_episodes, path_a2c, path_cpgpo, config):
         torch.save(trained_model.state_dict(), model_save_path)
         cpgpo_models.append(trained_model)
         all_models.append(trained_model)
+
 
     # Evaluate A2C and CPGPO models
     results = {'a2c': {'average_reward': 0, 'visitation': np.zeros((10, 10))},
@@ -170,16 +182,17 @@ def train_and_eval_maze(num_agents, num_episodes, path_a2c, path_cpgpo, config):
 if __name__ == "__main__":
     # train_n_a2c(50, 6000, "./trained_models/trained_a2c_models")
     # temp_func()
+    # 0.0009 for 2ac
     config = {
-        'learning_rate': 0.005,
-        'epoch': 200,
+        'learning_rate': 0.0007,
+        'epoch': 3000,
         'gamma': 0.99,
-        'starting_n': 4,
+        'starting_n': 1,
         'n_growth': 0.1,  # Assuming this represents the growth rate per epoch or condition
-        'max_n': 5,
-        'epsilon': 0.15,
+        'max_n': 1,
+        'epsilon': 0.25,
         'epsilon_decay': 0.01,  # Assuming this represents the decay rate per epoch or condition
-        'min_epsilon': 0.1,
+        'min_epsilon': 0.001,
         'reference_models': "./trained_models/2dGridWorld/trained_a2c_models",  # Directory containing reference models
     }
     #
@@ -187,6 +200,6 @@ if __name__ == "__main__":
     # train_and_eval_2d(num_agents=30, num_episodes=3000, path_a2c="./trained_models/2dGridWorld/trained_a2c_models",
                       #path_cpgpo="./trained_models/2dGridWorld/trained_cpgpo_models", config=config)
 
-    results = train_and_eval_maze(num_agents=50, num_episodes=5000, path_a2c="./trained_models/maze/trained_a2c_models",
+    results = train_and_eval_maze(num_agents=25, num_episodes=3000, path_a2c="./trained_models/maze/trained_a2c_models",
                       path_cpgpo="./trained_models/maze/trained_cpgpo_models", config=config)
     print(results)

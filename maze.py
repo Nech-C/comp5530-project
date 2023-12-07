@@ -30,9 +30,9 @@ class ActorCriticMaze(nn.Module):
         self.log_probs = None
         self.action_trajectory = None
         self.state_trajectory = None
-        self.fc = nn.Linear(25, 32)
-        self.actor = nn.Linear(32, 6)
-        self.critic = nn.Linear(32, 1)
+        self.fc = nn.Linear(25, 64)
+        self.actor = nn.Linear(64, 6)
+        self.critic = nn.Linear(64, 1)
         self.reset_trajectory()
 
     def forward(self, x):
@@ -99,9 +99,11 @@ class MazeEnv(gym.Env):
         # Get observation, reward, done, info
         observation = self.get_observation()
         reward = self.get_reward()
-        done = self.current_position == self.goal or self.num_steps > 240
+        done = self.current_position == self.goal or self.num_steps > 220
         if self.current_position == self.goal:
             print("goal!")
+        if done and self.current_position != self.goal:
+            reward = -0.5
         info = {}
 
         return observation, reward, done, info
