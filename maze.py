@@ -21,6 +21,7 @@ DEF_MAZE = np.array([
 ])
 DEF_PORTAL_PAIRS = {(0, 9): (8, 0), (8, 0): (0, 9)}
 
+
 # Actor-Critic Neural Network for Maze Environment
 class ActorCriticMaze(nn.Module):
     def __init__(self):
@@ -47,6 +48,7 @@ class ActorCriticMaze(nn.Module):
         self.log_probs = []  # Log probabilities
         self.values = []  # Value estimates
         self.rewards = []  # Observed rewards
+
 
 # Maze Environment
 class MazeEnv(gym.Env):
@@ -80,16 +82,19 @@ class MazeEnv(gym.Env):
 
         # Define observation and action spaces
         self.action_space = spaces.Discrete(len(self.actions))
-        self.observation_space = spaces.Box(low=0, high=6, shape=(self.observation_size**2,), dtype=int)
+        self.observation_space = spaces.Box(low=0, high=6, shape=(self.observation_size ** 2,), dtype=int)
 
     def step(self, action):
         # self.print_maze_with_agent()
         self.num_steps += 1
-
+        done = False
+        reward = 0
         # Handle action
         action = self.action_mapping[action]
         if action in ['up', 'down', 'left', 'right']:
-            self.move(self.actions[action])
+            if not self.move(self.actions[action]):
+                # done = True
+                reward = -0.1
             self.facing = action
         elif action == 'activate':
             self.activate_portal()
@@ -98,26 +103,33 @@ class MazeEnv(gym.Env):
 
         # Get observation, reward, done, info
         observation = self.get_observation()
-        reward = self.get_reward()
-        done = self.current_position == self.goal or self.num_steps > 220
-        if self.current_position == self.goal:
-            print("goal!")
-        if done and self.current_position != self.goal:
-            reward = -0.5
-        info = {}
+        if not done:
+            if self.current_position == self.goal:
+                reward = 1
+                print("goal!")
+                done = True
+            else:
+                if self.num_steps > 150:
+                    done = True
+                    reward = -0.5
+
+        info = {"pos:": self.current_position}
 
         return observation, reward, done, info
 
     def move(self, direction):
         new_position = (self.current_position[0] + direction[0], self.current_position[1] + direction[1])
-        if self.is_within_bounds(new_position):
+        if not self.is_within_bounds(new_position):
+            return False
+        else:
             grid_type = self.maze[new_position]
             if grid_type == 2 or grid_type == 5:  # Wall or gap
-                return
+                return True
             elif grid_type == 3:  # Breakable wall
                 self.maze[new_position] = 1
-                return
+                return True
             self.current_position = new_position
+            return True
 
     def is_valid_position(self, position):
         x, y = position
@@ -135,7 +147,7 @@ class MazeEnv(gym.Env):
             grid_type_between = self.maze[between_position]
             if grid_type_between == 5 and self.is_valid_position(over_position):
                 self.current_position = over_position
-            elif grid_type_between == 2 and random.random() < 0.20 and self.is_valid_position(over_position):
+            elif grid_type_between == 2 and random.random() < 0.35 and self.is_valid_position(over_position):
                 self.current_position = over_position
 
     def is_within_bounds(self, position):
@@ -179,6 +191,7 @@ class MazeEnv(gym.Env):
 
     def get_grid_size(self):
         return self.maze.shape
+
     def play(self):
         print("Starting position:", self.current_position)
         print("Goal:", self.goal)
@@ -208,8 +221,10 @@ class MazeEnv(gym.Env):
         maze_copy = np.array(self.maze, copy=True)
         maze_copy[self.current_position] = 7
         print(maze_copy)
-        print("obs:", self.get_observation().reshape((5,5)))
+        print("obs:", self.get_observation().reshape((5, 5)))
         print("pos:", self.current_position)
+
+
 # Example usage
 if __name__ == "__main__":
     env = MazeEnv()
