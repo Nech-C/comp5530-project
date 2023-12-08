@@ -187,12 +187,12 @@ if __name__ == "__main__":
         'learning_rate': 0.0007,
         'epoch': 3000,
         'gamma': 0.99,
-        'starting_n': 1,
+        'starting_n': 2,
         'n_growth': 0.1,  # Assuming this represents the growth rate per epoch or condition
-        'max_n': 1,
-        'epsilon': 0.25,
-        'epsilon_decay': 0.01,  # Assuming this represents the decay rate per epoch or condition
-        'min_epsilon': 0.001,
+        'max_n': 2,
+        'epsilon': 0.2,
+        'epsilon_decay': 0.025,  # Assuming this represents the decay rate per epoch or condition
+        'min_epsilon': 0.0,
         'reference_models': "./trained_models/2dGridWorld/trained_a2c_models",  # Directory containing reference models
     }
     #

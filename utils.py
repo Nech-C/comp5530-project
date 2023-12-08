@@ -10,7 +10,7 @@ from gym import spaces
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import jensenshannon
 from math import floor
-
+import time
 
 class ActorCritic(nn.Module):
     def __init__(self):
@@ -66,7 +66,8 @@ def get_discounted_rewards(rewards, gamma):
         R = r + gamma * R
         returns.insert(0, R)
     returns = torch.tensor(returns, dtype=torch.float)
-    returns = (returns - returns.mean()) / (returns.std() + 1e-5)
+    #returns = (returns - returns.mean()) / (returns.std() + 1e-5)
+    # print(returns)
     return returns
 
 
@@ -126,11 +127,13 @@ def nstep_cumulative_prob_from_states(model, n_step, states, actions):
 def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old, epsilon, optimizer, device):
     actor_loss = []
     critic_loss = []
-
+    counter = 0
+    updated = 0
     for log_prob, value, R, log_cp, log_cp_old in zip(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old):
         advantage = R - value.item()
         ratio = torch.exp(log_cp - log_cp_old)  # ratio of new CP to old CP
-
+        if len(log_probs) != len(log_nstep_cp) or len(log_probs) != len(log_nstep_cp_old):
+            exit(-1)
         # Determine if an update should happen
         update = False
         if ratio < 1 - epsilon or ratio > 1 + epsilon:
@@ -139,7 +142,9 @@ def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nst
             update = True
         elif advantage > 0 and ratio > 1:
             update = True
-
+        if update:
+            updated +=1
+        counter += 1
         # Calculate surrogate loss
         if update:
             surr = -log_prob * advantage
@@ -159,7 +164,9 @@ def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nst
     optimizer.zero_grad()
     total_loss.backward()
     optimizer.step()
-
+    print(f"update rate: {updated/counter}")
+    print(f"actor loss: {actor_loss.item()}, critic_loss: {critic_loss.item()}, reward: {returns[-1]}")
+    # time.sleep(2.5)
     return actor_loss.item(), critic_loss.item()
 
 
@@ -176,8 +183,63 @@ def should_update(log_cp_new, log_cp_old, epsilon, advantage):
         update = True  # Rule 3: Advantage positive, ratio more than 1
     return update
 
-
 def single_CPGPO(env, model, reference_model, config, device):
+    """
+    Train the model using the CPGPO algorithm with cumulative probability in the objective function,
+    growing n, and decreasing epsilon.
+    """
+    # Move models to the specified device
+    model = model.to(device)
+    reference_model = reference_model.to(device)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
+    for episode in range(config['epoch']):
+        print(episode)
+        # Adjust n and epsilon as training progresses
+        n_step = min(floor(config['starting_n'] + episode * config['n_growth']), config['max_n'])
+        epsilon = max(config['epsilon'] * (1. / (1 + config['epsilon_decay'] * episode)), config['min_epsilon'])
+
+        state = env.reset()
+        done = False
+        model.reset_trajectory()
+
+        while not done:
+            state_tensor = torch.FloatTensor(state).to(device).reshape(1, -1)
+            action_prob, value = model(state_tensor)
+            action_dist = torch.distributions.Categorical(action_prob)
+            action = action_dist.sample()
+            next_state, reward, done, _ = env.step(action.item())
+            log_prob = action_dist.log_prob(action)
+
+            # Storing trajectories
+            model.log_probs.append(log_prob)
+            model.values.append(value)
+            model.rewards.append(reward)
+            model.state_trajectory.append(state_tensor)
+            model.action_trajectory.append(action)
+
+            state = next_state
+
+        # Calculating returns and cumulative probabilities
+        returns = get_discounted_rewards(model.rewards, config['gamma']).to(device)
+        log_nstep_cp_new = nstep_cumulative_prob_from_logs(n_step, model.log_probs)
+        log_nstep_cp_old = nstep_cumulative_prob_from_states(reference_model, n_step, model.state_trajectory, model.action_trajectory)
+
+        # Backpropagation with custom update rules
+        actor_loss, critic_loss = bprop_with_cumulative_prob(
+            model.log_probs,
+            model.values,
+            returns,
+            log_nstep_cp_new,
+            log_nstep_cp_old,
+            epsilon,
+            optimizer,
+            device
+        )
+
+    return model
+
+def multi_CPGPO(env, model, reference_model, config, device):
     """
     Train the model using the CPGPO algorithm with cumulative probability in the objective function,
     growing n, and decreasing epsilon.
