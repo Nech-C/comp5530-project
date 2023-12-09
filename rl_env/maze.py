@@ -66,7 +66,7 @@ class ActorCriticMazeV2(nn.Module):
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fx2(x))
+        x = torch.relu(self.fc2(x))
         action_prob = torch.softmax(self.actor(x), dim=-1)
         value = self.critic(x)
         return action_prob, value
