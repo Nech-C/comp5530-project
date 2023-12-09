@@ -123,7 +123,8 @@ class MazeEnv(gym.Env):
         self.num_steps += 1
         done = False
         reward = 0
-        # Handle action
+        # Handle action & Record the action taken
+        self.action_sequence.append(action)
         action = self.action_mapping[action]
         if action in ['up', 'down', 'left', 'right']:
             if not self.move(self.actions[action]):
@@ -151,8 +152,7 @@ class MazeEnv(gym.Env):
 
         # Increment the visitation count
         self.visitation_matrix[self.current_position] += 1
-        # Record the action taken
-        self.action_sequence.append(self.action_mapping[action])
+
         info = {"pos:": self.current_position}
         if done:
             info['visitation_matrix'] = self.visitation_matrix
