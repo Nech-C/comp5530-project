@@ -12,14 +12,14 @@ DEF_MAZE = np.array([
     [1, 2, 1, 1, 1, 2, 2, 1, 1, 1],
     [1, 1, 1, 2, 1, 2, 1, 1, 2, 3],
     [2, 2, 1, 1, 1, 1, 2, 1, 2, 1],
-    [1, 1, 1, 5, 3, 1, 3, 1, 1, 1],
+    [4, 1, 1, 5, 3, 1, 3, 1, 1, 1],
     [1, 1, 1, 1, 3, 1, 2, 1, 1, 1],
     [2, 3, 1, 2, 1, 2, 1, 5, 1, 1],
     [1, 2, 3, 1, 2, 1, 1, 2, 2, 1],
-    [4, 1, 3, 1, 1, 1, 2, 2, 1, 1],
+    [1, 1, 3, 1, 1, 1, 2, 2, 1, 1],
     [2, 1, 1, 1, 2, 1, 1, 1, 1, 6]
 ])
-DEF_PORTAL_PAIRS = {(0, 9): (8, 0), (8, 0): (0, 9)}
+DEF_PORTAL_PAIRS = {(0, 9): (4, 0), (4, 0): (0, 9)}
 
 
 # Actor-Critic Neural Network for Maze Environment
@@ -143,7 +143,7 @@ class MazeEnv(gym.Env):
         if not done:
             if self.current_position == self.goal:
                 reward = 1.0
-                print("goal!")
+                #print("goal!")
                 done = True
             else:
                 if self.num_steps > 150:
@@ -160,6 +160,7 @@ class MazeEnv(gym.Env):
             info['cumulative_reward'] = self.cumulative_reward
             info['total_steps'] = self.num_steps
 
+        self.cumulative_reward += reward
         return observation, reward, done, info
 
     def move(self, direction):
