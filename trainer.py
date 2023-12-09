@@ -6,7 +6,7 @@ import utils
 import random
 import json
 import numpy
-from maze import MazeEnv, ActorCriticMaze
+from rl_env.maze import MazeEnv, ActorCriticMaze
 from datetime import datetime
 
 A2C_CONFIG = {
