@@ -50,6 +50,35 @@ class ActorCriticMaze(nn.Module):
         self.rewards = []  # Observed rewards
 
 
+class ActorCriticMazeV2(nn.Module):
+    def __init__(self):
+        super(ActorCriticMazeV2, self).__init__()
+        self.rewards = None
+        self.values = None
+        self.log_probs = None
+        self.action_trajectory = None
+        self.state_trajectory = None
+        self.fc1 = nn.Linear(25, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.actor = nn.Linear(64, 6)
+        self.critic = nn.Linear(64, 1)
+        self.reset_trajectory()
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fx2(x))
+        action_prob = torch.softmax(self.actor(x), dim=-1)
+        value = self.critic(x)
+        return action_prob, value
+
+    def reset_trajectory(self):
+        self.state_trajectory = []  # To store states
+        self.action_trajectory = []  # To store actions
+        self.log_probs = []  # Log probabilities
+        self.values = []  # Value estimates
+        self.rewards = []  # Observed rewards
+
+
 # Maze Environment
 class MazeEnv(gym.Env):
     def __init__(self, maze=DEF_MAZE, start=(0, 0), goal=(9, 9), portal_pairs=DEF_PORTAL_PAIRS):
@@ -62,6 +91,11 @@ class MazeEnv(gym.Env):
         self.facing = 'up'
         self.num_steps = 0
         self.invalid_moves = 0
+
+        # for evaluation:
+        self.visitation_matrix = np.zeros_like(self.maze)
+        self.action_sequence = []
+        self.cumulative_reward = 0
         # Define action space and mapping
         self.actions = {
             'up': (-1, 0),
@@ -115,7 +149,16 @@ class MazeEnv(gym.Env):
                     done = True
                     reward = -0.5
 
+        # Increment the visitation count
+        self.visitation_matrix[self.current_position] += 1
+        # Record the action taken
+        self.action_sequence.append(self.action_mapping[action])
         info = {"pos:": self.current_position}
+        if done:
+            info['visitation_matrix'] = self.visitation_matrix
+            info['action_sequence'] = self.action_sequence
+            info['cumulative_reward'] = self.cumulative_reward
+            info['total_steps'] = self.num_steps
 
         return observation, reward, done, info
 
@@ -178,15 +221,15 @@ class MazeEnv(gym.Env):
 
         return obs.flatten()
 
-    def get_reward(self):
-        return 1 if self.current_position == self.goal else 0
-
     def reset(self):
         self.current_position = (0, 0)
         self.facing = 'up'
         self.num_steps = 0
         self.maze = np.array(DEF_MAZE, dtype=int)
         self.invalid_moves = 0
+        self.visitation_matrix = np.zeros_like(self.maze)
+        self.action_sequence = []
+        self.cumulative_reward = 0
         return self.get_observation()
 
     def get_observation_size(self):
