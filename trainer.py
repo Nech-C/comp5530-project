@@ -17,7 +17,7 @@ A2C_CONFIG = {
 
 cpgpo_config_v1 = {
     'learning_rate': 0.0007,
-    'epoch': 8500,
+    'epoch': 8000,
     'gamma': 0.99,
     'starting_n': 1,
     'n_growth': 0.1,  # Assuming this represents the growth rate per epoch or condition
@@ -67,7 +67,7 @@ def train_maze_cpgpo(num_agents, config):
         if filename.endswith(".pth"):
             model_path = os.path.join(config['path_a2c'], filename)
             model = ActorCriticMaze().to(device)  # Initialize and move model to device
-            model.load_state_dict(torch.load(model_path))
+            model.load_state_dict(torch.load(model_path, map_location=device))
             model.eval()  # Set model to evaluation mode
             a2c_models.append(model)
 
