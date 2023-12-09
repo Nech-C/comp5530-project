@@ -6,7 +6,7 @@ import utils
 import random
 import json
 import numpy
-from rl_env.maze import MazeEnv, ActorCriticMaze
+from rl_env.maze import MazeEnv, ActorCriticMaze, ActorCriticMazeV2
 from datetime import datetime
 
 A2C_CONFIG = {
@@ -46,6 +46,18 @@ def train_maz_a2c(num_agents, path_a2c, config=A2C_CONFIG):
         model_save_path = os.path.join(path_a2c, f"a2c_maze_model_{i}.pth")
         torch.save(trained_model.state_dict(), model_save_path)
 
+
+def train_maz_a2c_v2(num_agents, path_a2c, config=A2C_CONFIG):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not os.path.exists(path_a2c):
+        os.makedirs(path_a2c)
+
+    for i in range(num_agents):
+        env = MazeEnv()  # Define your maze settings here
+        model = ActorCriticMazeV2().to(device)  # Move model to device
+        trained_model = utils.train_a2c(env, model, config['epoch'], config['learning_rate'], config['gamma'], device)
+        model_save_path = os.path.join(path_a2c, f"a2c_maze_model_{i}.pth")
+        torch.save(trained_model.state_dict(), model_save_path)
 
 def train_maze_cpgpo(num_agents, config):
     # Check for GPU availability
