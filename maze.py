@@ -61,7 +61,7 @@ class MazeEnv(gym.Env):
         self.observation_size = 5
         self.facing = 'up'
         self.num_steps = 0
-
+        self.invalid_moves = 0
         # Define action space and mapping
         self.actions = {
             'up': (-1, 0),
@@ -93,8 +93,10 @@ class MazeEnv(gym.Env):
         action = self.action_mapping[action]
         if action in ['up', 'down', 'left', 'right']:
             if not self.move(self.actions[action]):
-                # done = True
-                reward = -0.1
+                self.invalid_moves += 1
+                reward = -0.5
+                if self.invalid_moves >= 10:
+                    done = True
             self.facing = action
         elif action == 'activate':
             self.activate_portal()
@@ -105,7 +107,7 @@ class MazeEnv(gym.Env):
         observation = self.get_observation()
         if not done:
             if self.current_position == self.goal:
-                reward = 1
+                reward = 1.0
                 print("goal!")
                 done = True
             else:
@@ -184,6 +186,7 @@ class MazeEnv(gym.Env):
         self.facing = 'up'
         self.num_steps = 0
         self.maze = np.array(DEF_MAZE, dtype=int)
+        self.invalid_moves = 0
         return self.get_observation()
 
     def get_observation_size(self):

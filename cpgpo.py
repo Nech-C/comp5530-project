@@ -54,7 +54,6 @@ def nstep_cumulative_prob_from_states(model, n_step, states, actions):
 
     return nstep_cumulative_prob_from_logs(n_step, log_probs)
 
-
 def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nstep_cp_old, epsilon, optimizer, device):
     actor_loss = []
     critic_loss = []
