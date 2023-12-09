@@ -83,8 +83,8 @@ def bprop_with_cumulative_prob(log_probs, values, returns, log_nstep_cp, log_nst
             surr = -log_prob * advantage
         else:
             surr = torch.zeros_like(log_prob)
-        if counter < 10:
-            print(f"new: {log_cp}, old: {log_cp_old}, update: {update}, ratio: {ratio}")
+        # if counter < 10:
+        #     print(f"new: {log_cp}, old: {log_cp_old}, update: {update}, ratio: {ratio}")
         actor_loss.append(surr)
         # Move R to the same device as value before calculating mse_loss
         R_tensor = torch.tensor([R], device=device)
