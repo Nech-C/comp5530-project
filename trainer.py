@@ -95,6 +95,43 @@ def train_maze_cpgpo(num_agents, config):
         torch.save(trained_model.state_dict(), model_save_path)
         all_models.append(trained_model)
 
+def train_maze_cpgpo_v2(num_agents, config):
+    # Check for GPU availability
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not os.path.exists(config['path_a2c']):
+        return
+
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path_cpgpo = os.path.join(config['path_cpgpo'], current_time)
+    if not os.path.exists(path_cpgpo):
+        os.makedirs(path_cpgpo)
+
+    config_path = os.path.join(path_cpgpo, "config.json")
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=4)
+
+    a2c_models = []
+    for filename in os.listdir(config['path_a2c']):
+        if filename.endswith(".pth"):
+            model_path = os.path.join(config['path_a2c'], filename)
+            model = ActorCriticMazeV2().to(device)  # Initialize and move model to device
+            model.load_state_dict(torch.load(model_path, map_location=device))
+            model.eval()  # Set model to evaluation mode
+            a2c_models.append(model)
+
+    random.shuffle(a2c_models)
+    # Train CPGPO Agents# Train CPGPO Agents
+    all_models = a2c_models[0:4].copy()
+    for i in range(num_agents):
+        env = MazeEnv()  # Define your maze settings here
+        model = ActorCriticMazeV2().to(device)  # Move model to device
+        reference_model = random.choice(all_models).to(device)  # Move reference model to device
+        trained_model = cpgpo.single_CPGPO(env, model, reference_model, config, device)
+        model_save_path = os.path.join(path_cpgpo, f"cpgpo_maze_model_{i}.pth")
+        torch.save(trained_model.state_dict(), model_save_path)
+        all_models.append(trained_model)
+
+
 
 if __name__ == "__main__":
     train_maz_a2c(num_agents=50, path_a2c="./trained_models/maze/trained_a2c_models")
