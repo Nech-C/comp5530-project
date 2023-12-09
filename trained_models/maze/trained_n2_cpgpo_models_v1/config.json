@@ -10,5 +10,5 @@
     "min_epsilon": 0.0,
     "reference_models": "./trained_models/2dGridWorld/trained_a2c_models",
     "path_a2c": "./trained_models/maze/trained_a2c_models",
-    "path_cpgpo": "./trained_models/maze/trained_n2_cpgpo_models_v2"
+    "path_cpgpo": "./trained_models/maze/trained_n2_cpgpo_models_v1"
 }
