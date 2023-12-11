@@ -1,10 +1,12 @@
+import random
+
 import numpy as np
 import torch
 import statistics
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from rl_env.maze import MazeEnv, ActorCriticMaze
+from rl_env.maze import MazeEnv, ActorCriticMaze, ActorCriticMazeV2
 from collections import Counter
 
 base_maze_dir = "./trained_models/maze"
@@ -15,6 +17,8 @@ cpgpo_dir_names_v1 = [
     "trained_n3_cpgpo_models_v1",
     "trained_n4_cpgpo_models_v1"
 ]
+
+
 def evaluate_maze_agent(model, num_episodes):
     """
         model: the rl agent to be evaluated
@@ -52,34 +56,39 @@ def evaluate_maze_agent(model, num_episodes):
     return visitation_matrices, action_sequences, num_steps, rewards
 
 
-def evaluate_maze_agents(model_class, num_episodes, directories):
+def evaluate_maze_agents(model_class, num_episodes, directories, num_models):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     all_steps = []
     all_rewards = []
     all_visitations = []
     all_action_sequences = []
 
+    # Step 1: Collect all model paths
+    model_paths = []
     for directory in directories:
         for filename in os.listdir(directory):
             if filename.endswith(".pth"):
                 model_path = os.path.join(directory, filename)
-                model = model_class().to(device)
-                state_dict = torch.load(model_path, map_location=device)
-                model.load_state_dict(state_dict)
+                model_paths.append(model_path)
 
-                visitation, act_seq, steps, rewards = evaluate_maze_agent(model, num_episodes)
+    # Step 2: Randomly select models
+    selected_model_paths = random.sample(model_paths, min(num_models, len(model_paths)))
 
-                all_steps.extend(steps)
-                all_rewards.extend(rewards)
-                all_visitations.extend(visitation)
-                all_action_sequences.extend(act_seq)
+    # Step 3: Load and evaluate selected models
+    for model_path in selected_model_paths:
+        model = model_class().to(device)
+        state_dict = torch.load(model_path, map_location=device)
+        model.load_state_dict(state_dict)
+
+        visitation, act_seq, steps, rewards = evaluate_maze_agent(model, num_episodes)
+
+        all_steps.extend(steps)
+        all_rewards.extend(rewards)
+        all_visitations.extend(visitation)
+        all_action_sequences.extend(act_seq)
 
     return all_visitations, all_action_sequences, all_steps, all_rewards
 
-
-import numpy as np
-import matplotlib.pyplot as plt
-from collections import Counter
 
 def evaluate_maze_stats(visit_list, action_seq_list, step_num_list, reward_list, folder_path):
     # Creating the folder if it doesn't exist
@@ -131,7 +140,8 @@ def evaluate_maze_stats(visit_list, action_seq_list, step_num_list, reward_list,
             action_transition_matrix[seq[i], seq[i + 1]] += 1
 
     # Normalize the transition matrix
-    action_transition_matrix = np.nan_to_num(action_transition_matrix / action_transition_matrix.sum(axis=1, keepdims=True))
+    action_transition_matrix = np.nan_to_num(
+        action_transition_matrix / action_transition_matrix.sum(axis=1, keepdims=True))
 
     # Visualize and save the action transition matrix
     plt.figure()
@@ -153,24 +163,48 @@ def evaluate_maze_stats(visit_list, action_seq_list, step_num_list, reward_list,
     return stats
 
 
-if __name__ == '__main__':
-    base_maze_dir = "./trained_models/maze"
-    a2c_dir_name_v1 = "trained_a2c_models"
-    cpgpo_dir_names_v1 = ["trained_n1_cpgpo_models_v1", "trained_n2_cpgpo_models_v1", "trained_n3_cpgpo_models_v1", "trained_n4_cpgpo_models_v1"]
+def eval_absDiff():
+    base_maze_dir = "./trained_models/maze/absdiff/"
+    cpgpo_absDiff_dirs = ["trained_n1_cpgpo_models_v1/20231210_143635"]
+    result_folder = "./abs_diff"
+    cpgpo_absDiff_paths = [os.path.join(base_maze_dir, dir_name) for dir_name in cpgpo_absDiff_dirs]
+    visitation_matrices_cpgpo, action_sequences_cpgpo, steps_cpgpo, rewards_cpgpo = evaluate_maze_agents(
+        ActorCriticMazeV2, 100, cpgpo_absDiff_paths, 1)
 
+    stats_cpgpo = evaluate_maze_stats(visitation_matrices_cpgpo, action_sequences_cpgpo, steps_cpgpo, rewards_cpgpo,
+                                      os.path.join(result_folder, "cpgpo"))
+
+    for key, value in stats_cpgpo.items():
+        print(f"CPGPO {key}: {value}")
+
+if __name__ == '__main__':
+    eval_absDiff()
+    exit()
+    base_maze_dir = "./trained_models/maze/v2/"
+    a2c_dir_name_v2 = "trained_a2c_models_v2"
+    cpgpo_dir_names_v1 = ["trained_n1_cpgpo_models_v1", "trained_n2_cpgpo_models_v1", "trained_n3_cpgpo_models_v1",
+                          "trained_n4_cpgpo_models_v1"]
+    cpgpo_dir_names_v2 = ["trained_n1_cpgpo_models_v2", "trained_n2_cpgpo_models_v2",
+                          "trained_n3_cpgpo_models_v2",
+                          "trained_n4_cpgpo_models_v2"]
     # Paths for the model directories
-    a2c_v1_dir_paths = [os.path.join(base_maze_dir, a2c_dir_name_v1)]
-    cpgpo_v1_dir_paths = [os.path.join(base_maze_dir, dir_name) for dir_name in cpgpo_dir_names_v1]
+    a2c_v2_dir_paths = [os.path.join(base_maze_dir, a2c_dir_name_v2)]
+    cpgpo_v2_dir_paths = [os.path.join(base_maze_dir, dir_name) for dir_name in cpgpo_dir_names_v2]
 
     # Evaluate A2C models
-    visitation_matrices_a2c, action_sequences_a2c, steps_a2c, rewards_a2c = evaluate_maze_agents(ActorCriticMaze, 10, a2c_v1_dir_paths)
-    result_folder = './evaluation_results'
-    stats_a2c = evaluate_maze_stats(visitation_matrices_a2c, action_sequences_a2c, steps_a2c, rewards_a2c, os.path.join(result_folder, "a2c"))
+    visitation_matrices_a2c, action_sequences_a2c, steps_a2c, rewards_a2c = evaluate_maze_agents(ActorCriticMazeV2,
+                                                                                                 100, a2c_v2_dir_paths,
+                                                                                                 50)
+    result_folder = './evaluation_results_v2'
+    stats_a2c = evaluate_maze_stats(visitation_matrices_a2c, action_sequences_a2c, steps_a2c, rewards_a2c,
+                                    os.path.join(result_folder, "a2c"))
     for key, value in stats_a2c.items():
         print(f"A2C {key}: {value}")
 
     # Evaluate CPGPO models
-    visitation_matrices_cpgpo, action_sequences_cpgpo, steps_cpgpo, rewards_cpgpo = evaluate_maze_agents(ActorCriticMaze, 10, cpgpo_v1_dir_paths)
-    stats_cpgpo = evaluate_maze_stats(visitation_matrices_cpgpo, action_sequences_cpgpo, steps_cpgpo, rewards_cpgpo, os.path.join(result_folder, "cpgpo"))
+    visitation_matrices_cpgpo, action_sequences_cpgpo, steps_cpgpo, rewards_cpgpo = evaluate_maze_agents(
+        ActorCriticMazeV2, 100, cpgpo_v2_dir_paths, 50)
+    stats_cpgpo = evaluate_maze_stats(visitation_matrices_cpgpo, action_sequences_cpgpo, steps_cpgpo, rewards_cpgpo,
+                                      os.path.join(result_folder, "cpgpo"))
     for key, value in stats_cpgpo.items():
         print(f"CPGPO {key}: {value}")
