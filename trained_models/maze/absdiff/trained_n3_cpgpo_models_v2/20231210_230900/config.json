@@ -1,0 +1,14 @@
+{
+    "learning_rate": 0.0007,
+    "epoch": 9000,
+    "gamma": 0.99,
+    "starting_n": 3,
+    "n_growth": 0.1,
+    "max_n": 3,
+    "epsilon": 0.22,
+    "epsilon_decay": 0.0015,
+    "min_epsilon": 0.0,
+    "reference_directory": "./trained_models/maze/absdiff",
+    "path_cpgpo": "./trained_models/maze/absdiff/trained_n3_cpgpo_models_v2",
+    "algo": "abs cp diff"
+}

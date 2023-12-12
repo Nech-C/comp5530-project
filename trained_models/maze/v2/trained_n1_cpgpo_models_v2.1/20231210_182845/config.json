@@ -1,0 +1,13 @@
+{
+    "learning_rate": 0.0007,
+    "epoch": 9000,
+    "gamma": 0.99,
+    "starting_n": 1,
+    "n_growth": 0.1,
+    "max_n": 1,
+    "epsilon": 0.9,
+    "epsilon_decay": 0.0035,
+    "min_epsilon": 0.0,
+    "reference_directory": "./trained_models/maze/v2",
+    "path_cpgpo": "./trained_models/maze/v2/trained_n1_cpgpo_models_v2.1"
+}
